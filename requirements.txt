@@ -1,0 +1,13 @@
+pandas
+numpy
+scikit-learn
+mlflow==3.15.1
+psycopg2-binary
+kfp
+fastapi
+uvicorn
+streamlit
+requests
+pydantic
+great-expectations
+pytest

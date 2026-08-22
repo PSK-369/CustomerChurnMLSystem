@@ -1,0 +1,52 @@
+name: MLOps CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with: { python-version: '3.9' }
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest flake8
+      - name: Lint
+        run: flake8 serving/main.py training/eda_and_training.py
+      - name: Unit Tests
+        run: pytest tests/ # Assume basic tests exist for feature engineering
+      - name: Build Docker Image
+        run: docker build -t churn-api:${{ github.sha }} -f serving/Dockerfile .
+      - name: Smoke Test API
+        run: |
+          docker run -d --name api-test -p 8000:8000 churn-api:${{ github.sha }}
+          sleep 10
+          curl -f http://localhost:8000/health || exit 1
+          docker stop api-test
+
+  deploy-staging:
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+    steps:
+      - name: Deploy to Staging (Simulated)
+        run: echo "Deploying image ${{ github.sha }} to staging environment..."
+  
+  deploy-prod:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+    steps:
+      - name: Manual Approval Gate
+        run: echo "Waiting for manual approval in GitHub Environments..."
+      - name: Push to Registry & Deploy
+        run: echo "Pushing to ECR/GAR and updating production Kubernetes deployment..."

@@ -1,0 +1,209 @@
+# PIPELINE DEFINITION
+# Name: churn-data-pipeline
+# Description: Extract, Transform, Validate
+# Inputs:
+#    db_uri: str
+components:
+  comp-extract-data:
+    executorLabel: exec-extract-data
+    inputDefinitions:
+      parameters:
+        db_uri:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        output_csv:
+          parameterType: STRING
+  comp-transform-data:
+    executorLabel: exec-transform-data
+    inputDefinitions:
+      parameters:
+        input_csv:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        output_csv:
+          parameterType: STRING
+  comp-validate-data:
+    executorLabel: exec-validate-data
+    inputDefinitions:
+      parameters:
+        input_csv:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-extract-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - extract_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'psycopg2-binary'\
+          \ 'pandas'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.17.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef extract_data(db_uri: str, output_csv: OutputPath(str)):  # pyright:\
+          \ ignore[reportInvalidTypeForm]\n    import psycopg2\n    import pandas\
+          \ as pd\n\n    query = \"\"\"\n    WITH customer_stats AS (\n        SELECT\
+          \ customer_id,\n               COUNT(order_id) AS total_orders,\n      \
+          \         MAX(order_date) AS last_order_date,\n               AVG(order_total)\
+          \ AS avg_order_value\n        FROM orders\n        WHERE status = 'completed'\n\
+          \        GROUP BY customer_id\n    )\n    SELECT c.customer_id,\n      \
+          \     c.country,\n            c.signup_date,\n            c.marketing_opt_in,\n\
+          \           COALESCE(cs.total_orders, 0) AS total_orders,\n           COALESCE(cs.avg_order_value,\
+          \ 0) AS avg_order_value,\n           EXTRACT(DAY FROM CURRENT_DATE - COALESCE(cs.last_order_date::date,\
+          \ CURRENT_DATE))\n               AS days_since_last_order,\n           CASE\
+          \ WHEN cs.last_order_date < CURRENT_DATE - INTERVAL '90 days'\n        \
+          \             OR cs.last_order_date IS NULL THEN 1 ELSE 0 END AS churned\n\
+          \    FROM customers AS c\n    LEFT JOIN customer_stats AS cs ON c.customer_id\
+          \ = cs.customer_id\n    \"\"\"\n\n    with psycopg2.connect(db_uri) as conn:\n\
+          \        df = pd.read_sql_query(query, conn)\n    df.to_csv(output_csv,\
+          \ index=False)\n\n"
+        image: python:3.9
+    exec-transform-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - transform_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef transform_data(input_csv: InputPath(str), output_csv: OutputPath(str)):\
+          \  # pyright: ignore[reportInvalidTypeForm]\n    import pandas as pd\n \
+          \   df = pd.read_csv(input_csv)\n    required_columns = {\n        'customer_id',\
+          \ 'country', 'signup_date', 'marketing_opt_in',\n        'total_orders',\
+          \ 'churned',\n    }\n    missing_columns = required_columns.difference(df.columns)\n\
+          \    if missing_columns:\n        raise ValueError(f\"Missing required columns:\
+          \ {sorted(missing_columns)}\")\n    df = df.dropna(subset=['churned']).drop_duplicates(subset=['customer_id'])\n\
+          \    df['total_orders'] = df['total_orders'].clip(lower=0)\n    df['signup_date']\
+          \ = pd.to_datetime(df['signup_date'], errors='coerce')\n    df['signup_year']\
+          \ = df['signup_date'].dt.year.fillna(2020).astype(int)\n    df['signup_month']\
+          \ = df['signup_date'].dt.month.fillna(1).astype(int)\n    df['country_encoded']\
+          \ = pd.Categorical(df['country']).codes\n    df = df.drop(columns=['country',\
+          \ 'signup_date', 'avg_order_value', 'days_since_last_order'])\n    df.to_csv(output_csv,\
+          \ index=False)\n\n"
+        image: python:3.9
+    exec-validate-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - validate_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.17.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef validate_data(input_csv: InputPath(str)):  # pyright: ignore[reportInvalidTypeForm]\n\
+          \    import pandas as pd\n    df = pd.read_csv(input_csv)\n    if df.empty:\n\
+          \        raise ValueError(\"Validation failed: extracted dataset is empty\"\
+          )\n    if not df['churned'].isin([0, 1]).all():\n        raise ValueError(\"\
+          Validation failed: churn labels must be 0 or 1\")\n    if not df['customer_id'].is_unique:\n\
+          \        raise ValueError(\"Validation failed: duplicate customer IDs found\"\
+          )\n    print(\"Data validation passed\")\n\n"
+        image: python:3.9
+pipelineInfo:
+  description: Extract, Transform, Validate
+  name: churn-data-pipeline
+root:
+  dag:
+    tasks:
+      extract-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-extract-data
+        inputs:
+          parameters:
+            db_uri:
+              componentInputParameter: db_uri
+        taskInfo:
+          name: extract-data
+      transform-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-transform-data
+        dependentTasks:
+        - extract-data
+        inputs:
+          parameters:
+            input_csv:
+              taskOutputParameter:
+                outputParameterKey: output_csv
+                producerTask: extract-data
+        taskInfo:
+          name: transform-data
+      validate-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-validate-data
+        dependentTasks:
+        - transform-data
+        inputs:
+          parameters:
+            input_csv:
+              taskOutputParameter:
+                outputParameterKey: output_csv
+                producerTask: transform-data
+        taskInfo:
+          name: validate-data
+  inputDefinitions:
+    parameters:
+      db_uri:
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.17.0
