@@ -1,7 +1,8 @@
 pandas
 numpy
 scikit-learn
-mlflow==3.15.1
+# mlflow==3.15.1 # in local it is working
+mlflow>=3.1.0
 psycopg2-binary
 kfp
 fastapi
