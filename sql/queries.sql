@@ -11,7 +11,7 @@ FROM customers c;
 
 -- EXPLAIN ANALYZE will show: Sequential Scans on orders (3M rows) for EVERY customer (1M times). 
 -- Bottleneck: Repeated subqueries and missing indexes on orders.customer_id and orders.order_date.
-
+-- correlated subqueries per customer row without indexes, causing repeated sequential scans on the orders table (3M rows) for each customer
 
 -- 2. OPTIMIZATION: Add Indexes
 
