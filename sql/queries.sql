@@ -133,7 +133,6 @@ LEFT JOIN customer_stats cs
     ON c.customer_id = cs.customer_id;
 
 
--- WHY IT WORKED: 
 -- 1. Replaced N+1 correlated subqueries with a single-pass GROUP BY CTE.
 -- 2. Added B-Tree indexes on customer_id and order_date, turning sequential scans into fast index scans.
 -- 3. Reduced execution time from ~minutes to <2 seconds on 3M+ rows.
