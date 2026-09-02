@@ -1,0 +1,267 @@
+
+Steps:
+
+3. Generate the data (creates a `data/` folder with 4 CSVs):
+   pip install -r requirements.txt
+   python generate_data.py --out-dir data
+
+4. Start the database:
+   docker-compose up -d
+
+5. Load the schema and data (run each line separately):
+   docker exec -i ds_interview_postgres psql -U ds_candidate -d ecommerce -f /sql/schema.sql
+   docker exec ds_interview_postgres psql -U ds_candidate -d ecommerce -c "COPY customers FROM '/data/customers.csv' WITH (FORMAT csv, HEADER true, NULL '')"
+   docker exec ds_interview_postgres psql -U ds_candidate -d ecommerce -c "COPY products FROM '/data/products.csv' WITH (FORMAT csv, HEADER true, NULL '')"
+   docker exec ds_interview_postgres psql -U ds_candidate -d ecommerce -c "COPY orders FROM '/data/orders.csv' WITH (FORMAT csv, HEADER true, NULL '')"
+   docker exec ds_interview_postgres psql -U ds_candidate -d ecommerce -c "COPY order_items FROM '/data/order_items.csv' WITH (FORMAT csv, HEADER true, NULL '')"
+
+
+
+   6. Verify: open http://localhost:8080 (Adminer) — System: PostgreSQL, 
+   Server: postgres, Username: ds_candidate, Password: ds_candidate_pw, 
+   Database: ecommerce
+
+Connection string for scripts/notebooks:
+   postgresql://ds_candidate:ds_candidate_pw@localhost:5432/ecommerce
+
+Part1:
+Run PowerShell from the project directory:
+cd F:\CustomerChrunMLSystem
+
+Step 1: Activate the environment
+.\customerchurnenv\Scripts\Activate.ps1
+
+
+Step 2: Start PostgreSQL and MLflow
+docker compose up -d postgres mlflow
+
+Part2:
+docker compose pull mlflow
+docker compose up -d --force-recreate mlflow
+
+
+docker ps --filter name=ds_interview_mlflow
+docker exec ds_interview_mlflow mlflow --version
+
+Hint:
+mlflow, version 3.15.1
+
+Install matching dependancy
+py -m pip install -r requirements.txt
+
+
+docker ps
+
+ds_interview_postgres
+ds_interview_mlflow
+
+Part 4:
+Check MLflow:
+Invoke-WebRequest http://localhost:5000
+
+Step 3: Confirm PostgreSQL data
+docker exec ds_interview_postgres psql `
+  -U ds_candidate `
+  -d ecommerce `
+  -c "\dt"
+
+Check row counts:
+docker exec ds_interview_postgres psql `
+  -U ds_candidate `
+  -d ecommerce `
+  -c "SELECT COUNT(*) FROM customers; SELECT COUNT(*) FROM orders;"
+
+Part 5:
+Step 4: Configure MLflow
+
+$env:MLFLOW_TRACKING_URI = "http://localhost:5000"
+
+Verify: $env:MLFLOW_TRACKING_URI
+
+Step 5: Train the models
+python training\eda_and_training.py
+
+This script:
+
+Loads customer data.
+Cleans missing values and duplicates.
+Encodes countries.
+Creates date features.
+Applies log1p to total_orders.
+Trains Logistic Regression, Decision Tree, and Random Forest.
+Logs metrics and models to MLflow.
+Selects the best model.
+Registers it as ChurnModel.
+Promotes it to the Production stage.
+
+end:
+Registered ChurnModel  Production
+
+
+Part 6:
+Step 6: Verify the registered model
+
+
+py -c "from mlflow.tracking import MlflowClient; c=MlflowClient('http://localhost:5000'); print([(v.name, v.version, v.current_stage) for v in c.search_model_versions('name=' + chr(39) + 'ChurnModel' + chr(39))])"
+
+
+Expected result includes:
+ChurnModel
+Production
+
+
+You can also open the MLflow interface:
+
+http://localhost:5000
+
+Part 7:
+Step 7: Test the API locally
+$env:MODEL_URI = "models:/ChurnModel/Production"
+
+Start FastAPI:
+
+
+$env:MLFLOW_TRACKING_URI = "http://localhost:5000"
+$env:MODEL_URI = "models:/ChurnModel@Production"
+
+.\customerchurnenv\Scripts\python.exe -m uvicorn serving.main:app `
+  --host 0.0.0.0 `
+  --port 8000 `
+  --reload
+
+Keep this terminal open.
+
+Open another PowerShell terminal and run:
+Invoke-RestMethod http://localhost:8000/health
+
+status       : healthy
+model_loaded : True
+
+
+Step 8: Send a live prediction
+
+$body = @{
+    total_orders = 5
+    country_encoded = 0
+    signup_year = 2020
+    signup_month = 1
+    marketing_opt_in = $true
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  http://localhost:8000/predict `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+
+Expected response:
+{
+  "churn_risk": 0,
+  "probability": 0.18
+}
+
+The exact probability will depend on the trained model.
+
+Step 9: Build the API Docker image
+Stop the local Uvicorn process first, then run:
+
+docker build --no-cache -t churn-api -f serving\Dockerfile .
+
+Step 10: Start the containerized API
+
+
+docker rm -f churn_api 2>$null
+
+docker run -d `
+  --name churn_api `
+  -p 8000:8000 `
+  -e MLFLOW_TRACKING_URI="http://host.docker.internal:5000" `
+  -e MODEL_URI="models:/ChurnModel@Production" `
+  churn-api
+
+
+Check API logs:
+docker logs churn_api
+
+
+This proves that:
+
+Streamlit -> FastAPI container -> MLflow server -> Production model
+
+Step 12: Start the Streamlit frontend
+
+py -m streamlit run serving\app.py
+
+Open the displayed browser URL, usually:
+http://localhost:8501
+
+
+docker build --no-cache -t churn-streamlit -f serving\Dockerfile.streamlit . --progress=plain
+
+
+docker rm -f churn_streamlit 2>$null
+
+docker run -d `
+  --name churn_streamlit `
+  -p 8501:8501 `
+  -e API_URL="http://host.docker.internal:8000" `
+  churn-streamlit
+
+Enter customer information and click Predict.
+
+Step 13: Demonstrate the pipeline code
+Validate the Kubeflow pipeline graph:
+
+
+
+python -c "from kfp import compiler; from pipeline.kfp_pipeline import churn_pipeline; compiler.Compiler().compile(churn_pipeline, 'pipeline.yaml'); print('KFP pipeline compiled successfully')"
+
+Remove the generated temporary file:
+
+Remove-Item pipeline.yaml -Force
+
+PostgreSQLStages:
+   -> extract_data
+   -> transform_data
+   -> validate_data
+
+
+Monitoring:
+python -c "import pandas as pd; df=pd.read_csv('data/clean_features.csv',usecols=['total_orders']).sample(10000,random_state=42); df.to_csv('data/live_predictions_log.csv',index=False)"
+
+data/clean_features.csv
+
+python monitoring\drift_check.py
+
+
+
+
+
+Step 14: Run basic code checks
+
+python -m compileall pipeline serving training
+
+python -c "import fastapi, mlflow, pandas, sklearn, streamlit; print('Dependencies loaded successfully')"
+
+Incase of errors:
+
+
+docker logs ds_interview_mlflow
+docker logs churn_api
+python -c "from mlflow import MlflowClient; print([(x.name, x.version, x.current_stage) for x in MlflowClient('http://localhost:5000').search_model_versions(\"name='ChurnModel'\")])"
+
+
+#for large file sending purpose into github
+
+git lfs install
+
+git lfs track "data/customers.csv"
+git lfs track "data/order_items.csv"
+git lfs track "data/orders.csv"
+
+git add .gitattributes
+git commit -m "Track datasets with Git LFS"
+
+git lfs migrate import --include="data/customers.csv,data/order_items.csv,data/orders.csv"
+
+git push -u origin main --force
